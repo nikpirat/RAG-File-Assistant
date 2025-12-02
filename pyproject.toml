@@ -1,0 +1,79 @@
+[tool.poetry]
+name = "rag-file-assistant"
+version = "0.1.0"
+description = "RAG-powered Telegram file assistant"
+authors = ["Your Name <your.email@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# Core
+fastapi = "0.123.0"
+uvicorn = { version = "0.24.0", extras = ["standard"] }
+pydantic = "2.12.5"
+pydantic-settings = "2.1.0"
+python-dotenv = "1.0.0"
+
+# Vector DB & Embeddings
+qdrant-client = "1.9.0"
+ollama = "0.1.0"
+sentence-transformers = "2.2.0"
+transformers = "4.53.0"
+
+# Document Processing
+unstructured = "0.18.21"
+PyMuPDF = "1.26.6"
+python-docx = "1.1.0"
+pandas = "2.3.3"
+openpyxl = "3.1.2"
+python-magic = "0.4.27"
+
+# Database
+sqlalchemy = "2.0.44"
+alembic = "1.17.2"
+psycopg2-binary = "2.9.11"
+asyncpg = "0.31.0"
+
+# Redis / Caching
+redis = "5.0.1"
+hiredis = "^2.3"
+
+# Logging
+structlog = "23.2.0"
+python-json-logger = "2.0.7"
+
+# Utilities
+tenacity = "8.2.3"
+aiofiles = "25.1.0"
+watchdog = "3.0.0"
+tqdm = "^4.66"
+pathlib = "^1.0"
+
+# File/intake
+pypdf = "6.4.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "7.4.3"
+pytest-asyncio = "0.21.1"
+pytest-cov = "4.1.0"
+black = "^23.12"
+ruff = "^0.1"
+mypy = "^1.8"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true

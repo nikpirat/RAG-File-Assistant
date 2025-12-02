@@ -1,0 +1,75 @@
+rag-file-assistant/
+├── src/
+│   ├── __init__.py
+│   ├── main.py                 # Application entry point
+│   │
+│   ├── config/
+│   │   ├── __init__.py
+│   │   ├── settings.py         # Pydantic settings
+│   │   └── logging_config.py
+│   │
+│   ├── telegram/
+│   │   ├── __init__.py
+│   │   ├── bot.py              # Bot initialization
+│   │   ├── handlers.py         # Message handlers
+│   │   └── middleware.py       # Rate limiting, auth
+│   │
+│   ├── agent/
+│   │   ├── __init__.py
+│   │   ├── graph.py            # LangGraph agent definition
+│   │   ├── tools.py            # RAG tools for agent
+│   │   ├── prompts.py          # System prompts
+│   │   └── memory.py           # Conversation memory
+│   │
+│   ├── ingestion/
+│   │   ├── __init__.py
+│   │   ├── scanner.py          # File system scanner
+│   │   ├── parsers.py          # Document parsers
+│   │   ├── chunker.py          # Smart chunking
+│   │   └── pipeline.py         # Ingestion pipeline
+│   │
+│   ├── retrieval/
+│   │   ├── __init__.py
+│   │   ├── vector_store.py     # Qdrant operations
+│   │   ├── embeddings.py       # Embedding generation
+│   │   ├── hybrid_search.py    # Vector + metadata search
+│   │   └── reranker.py         # Result reranking
+│   │
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── database.py         # SQLAlchemy models
+│   │   └── schemas.py          # Pydantic schemas
+│   │
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── transcription.py    # Voice-to-text
+│   │   ├── llm.py              # LLM interface
+│   │   └── file_manager.py     # File operations
+│   │
+│   ├── tasks/
+│   │   ├── __init__.py
+│   │   ├── celery_app.py       # Celery config
+│   │   └── workers.py          # Background tasks
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       ├── logger.py           # Logging utilities
+│       └── validators.py       # Input validation
+│
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── configurationTest.py
+│
+├── scripts/
+│   ├── index_files.py          # Initial indexing
+│   └── migrate_db.py           # DB migrations
+│
+├── alembic/                    # DB migrations
+├── docker/
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   └── .env.example
+│
+├── pyproject.toml
+└── README.md

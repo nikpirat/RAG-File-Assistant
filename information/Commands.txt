@@ -1,0 +1,26 @@
+# Start all services
+docker-compose up -d
+
+# Stop all services
+docker-compose down
+
+# Stop and delete all data (CAREFUL!)
+docker-compose down -v
+
+# View logs
+docker-compose logs -f [service_name]
+
+# Restart a service
+docker-compose restart [service_name]
+
+# Check service health
+docker-compose ps
+
+# Access PostgreSQL shell
+docker exec -it rag_postgres psql -U postgres -d rag_assistant
+
+# Access Redis shell
+docker exec -it rag_redis redis-cli
+
+# Check Qdrant web UI
+# Open browser: http://localhost:6333/dashboard

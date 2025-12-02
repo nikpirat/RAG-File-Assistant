@@ -1,0 +1,10 @@
+User (Telegram)
+    ↓
+Telegram Bot Handler
+    ↓
+Task Queue (Celery + Redis)
+    ↓
+Agent Orchestrator (LangGraph)
+    ↓ ↙ ↘
+Vector DB    PostgreSQL    File System
+(Qdrant)     (Metadata)    (1TB Files)

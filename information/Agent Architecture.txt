@@ -1,0 +1,8 @@
+(LangGraph)
+Agent nodes:
+1. Query Understanding → Classify intent
+2. Tool Selection → Choose search strategy
+3. Retrieval → Execute hybrid search
+4. Context Assembly → Gather relevant chunks
+5. Response Generation → Answer with citations
+6. Memory Update → Store conversation context

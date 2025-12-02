@@ -1,0 +1,21 @@
+# Store rich metadata for filtering WITHOUT re-embedding
+{
+    "file_path": "/path/to/file.pdf",
+    "file_name": "quarterly_report.pdf",
+    "file_size_bytes": 2048000,
+    "file_type": "pdf",
+    "created_at": "2024-01-15",
+    "modified_at": "2024-01-20",
+    "word_count": 5000,
+    "page_count": 25
+}
+
+# Route queries to appropriate search strategy
+- "files larger than 10MB" → Metadata filter
+- "find document about AI" → Vector search
+- "file named report_2024" → Fuzzy name match
+- "sales data from Q3" → Hybrid (semantic + metadata)
+
+# Stream LLM responses to Telegram for better UX
+async for chunk in llm.astream():
+    await update.message.edit_text(accumulated_text + chunk)
