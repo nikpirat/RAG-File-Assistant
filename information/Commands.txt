@@ -24,3 +24,9 @@ docker exec -it rag_redis redis-cli
 
 # Check Qdrant web UI
 # Open browser: http://localhost:6333/dashboard
+
+# Delete Qdrant collection of chunks if new files have been added
+# Invoke-WebRequest -Uri "http://localhost:6333/collections/chunks" -Method Delete
+
+# See Qdrant collection of chunks
+# Invoke-WebRequest -Uri "http://localhost:6333/collections/chunks" -Method Get

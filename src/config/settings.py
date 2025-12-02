@@ -1,7 +1,7 @@
-"""Application configuration using Pydantic Settings."""
+"""Application configuration using Pydantic Settings - Phase 2."""
 from pathlib import Path
-from typing import Optional
-from pydantic import Field, field_validator
+from typing import Optional, List
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "RAG File Assistant"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     debug: bool = False
     log_level: str = "INFO"
 
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # Ollama
     ollama_host: str = "http://localhost:11434"
-    embedding_model: str = "nomic-embed-text"  # Free, optimized for RAG
+    embedding_model: str = "nomic-embed-text"
     embedding_dimensions: int = 768
     llm_model: str = "llama3.2:3b"
     llm_temperature: float = 0.1
@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     redis_password: Optional[str] = None
 
     # Chunking Strategy
-    chunk_size: int = 512  # tokens
-    chunk_overlap: int = 50  # tokens
+    chunk_size: int = 512
+    chunk_overlap: int = 50
     min_chunk_size: int = 10
 
     # Retrieval
@@ -67,17 +67,44 @@ class Settings(BaseSettings):
     rerank_top_k: int = 5
 
     # Processing
-    batch_size: int = 50
+    batch_size: int = 20
     max_workers: int = 4
+
+    # Telegram Bot (Phase 2)
+    telegram_bot_token: str = ""
+    telegram_allowed_users: str = ""  # Comma-separated user IDs
+    telegram_max_voice_size_mb: int = 20
+
+    # Whisper (Voice Transcription)
+    whisper_model: str = "base"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+
+    # Celery
+    celery_broker_url: Optional[str] = None
+    celery_result_backend: Optional[str] = None
+
+    # Rate Limiting
+    rate_limit_messages: int = 20
+    rate_limit_voice: int = 5
+
+    # Agent
+    agent_max_iterations: int = 10
+    agent_temperature: float = 0.1
+    agent_thinking_enabled: bool = True
+
+    # Memory
+    memory_max_messages: int = 20
+    memory_summary_threshold: int = 10
 
     # Sentry (optional)
     sentry_dsn: Optional[str] = None
 
-    @field_validator("files_root_path")
+    @classmethod
     def validate_files_path(cls, v: Path) -> Path:
         """Ensure files path exists."""
         if not v.exists():
-            raise ValueError(f"Files root path does not exist: {v}")
+            v.mkdir(parents=True, exist_ok=True)
         return v.resolve()
 
     @property
@@ -101,6 +128,23 @@ class Settings(BaseSettings):
         """Redis connection string."""
         auth = f":{self.redis_password}@" if self.redis_password else ""
         return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def celery_broker(self) -> str:
+        """Celery broker URL."""
+        return self.celery_broker_url or self.redis_url
+
+    @property
+    def celery_backend(self) -> str:
+        """Celery result backend URL."""
+        return self.celery_result_backend or self.redis_url
+
+    @property
+    def allowed_user_ids(self) -> List[str]:
+        """Parse allowed user IDs."""
+        if not self.telegram_allowed_users:
+            return []
+        return [uid.strip() for uid in self.telegram_allowed_users.split(",") if uid.strip()]
 
 
 # Global settings instance
