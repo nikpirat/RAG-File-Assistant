@@ -1,4 +1,4 @@
-"""Telegram bot message handlers."""
+"""Enhanced Telegram bot handlers with file sending capability."""
 from pathlib import Path
 from telegram import Update
 from telegram.ext import ContextTypes, MessageHandler, CommandHandler, filters
@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 
 
 class BotHandlers:
-    """Telegram bot handlers."""
+    """Enhanced Telegram bot handlers with file sending."""
 
     def __init__(self):
         # Initialize services
@@ -36,7 +36,7 @@ class BotHandlers:
             expire_on_commit=False,
         )
 
-        logger.info("bot_handlers_initialized")
+        logger.info("enhanced_bot_handlers_initialized")
 
     def _check_user_allowed(self, user_id: int) -> bool:
         """Check if user is allowed to use bot."""
@@ -63,7 +63,9 @@ I'm your intelligent file assistant. I can help you:
 📋 List files by name or type
 📊 Get statistics about your files
 🔍 Find specific information in documents
+📤 Send you actual files via Telegram
 💬 Remember our conversation context
+🎤 Understand voice messages
 
 **Commands:**
 /start - Show this message
@@ -71,7 +73,13 @@ I'm your intelligent file assistant. I can help you:
 /stats - Show file statistics
 /clear - Clear conversation history
 
-Just send me a message or voice note with your question!
+**Examples:**
+• "Find documents about machine learning"
+• "What's the answer to question 8 in exam.txt?"
+• "Send me the sales report"
+• "List all PDF files"
+
+Just send me a message or voice note!
 """
 
         await update.message.reply_text(welcome_message)
@@ -84,22 +92,29 @@ Just send me a message or voice note with your question!
    "Find documents about machine learning"
    "Show me files containing sales data"
 
-2️⃣ **List files:**
+2️⃣ **Get specific content:**
+   "What's question 8 in exam.txt?"
+   "Show me section 3 from the manual"
+   "Find the answer to: what is AI?"
+
+3️⃣ **Get files:**
+   "Send me the report.pdf"
+   "Give me the spreadsheet"
+   "Share the presentation"
+
+4️⃣ **List files:**
    "List all PDF files"
    "Show files named report"
 
-3️⃣ **Get info:**
+5️⃣ **Get info:**
    "What files do you have?"
    "How many documents are indexed?"
 
-4️⃣ **Ask questions:**
-   "What does the contract say about termination?"
-   "Summarize the quarterly report"
-
 💡 **Tips:**
-- You can send voice messages
+- You can send voice messages (speak clearly!)
 - I remember our conversation
 - Be specific for better results
+- I can send files up to 50MB
 - Use /clear to start fresh
 """
 
@@ -135,8 +150,38 @@ Just send me a message or voice note with your question!
 
         await update.message.reply_text("✅ Conversation history cleared!")
 
+    async def _send_files_to_user(
+        self,
+        update: Update,
+        files_to_send: list,
+    ):
+        """Send files to user via Telegram."""
+        for file_info in files_to_send:
+            try:
+                file_path = Path(file_info["path"])
+
+                if not file_path.exists():
+                    await update.message.reply_text(f"❌ File not found: {file_info['name']}")
+                    continue
+
+                # Send file
+                await update.message.reply_text(f"📤 Sending {file_info['name']}...")
+
+                with open(file_path, 'rb') as f:
+                    await update.message.reply_document(
+                        document=f,
+                        filename=file_info['name'],
+                        caption=f"📄 {file_info['name']} ({file_info.get('size_mb', 0):.2f}MB)"
+                    )
+
+                logger.info("file_sent", file=file_info['name'], user_id=update.effective_user.id)
+
+            except Exception as e:
+                logger.error("file_send_failed", file=file_info.get('name'), error=str(e))
+                await update.message.reply_text(f"❌ Error sending {file_info.get('name')}: {str(e)}")
+
     async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle text messages."""
+        """Handle text messages with file sending support."""
         user = update.effective_user
         chat_id = str(update.effective_chat.id)
         message_text = update.message.text
@@ -159,8 +204,8 @@ Just send me a message or voice note with your question!
                 tools = AgentTools(session, self.embedding, self.vector_store)
                 agent = FileAssistantAgent(tools, memory, self.llm)
 
-                # Run agent
-                response = await agent.run(
+                # Run agent (returns dict with response and files)
+                result = await agent.run(
                     user_query=message_text,
                     user_id=str(user.id),
                     chat_id=chat_id,
@@ -168,7 +213,10 @@ Just send me a message or voice note with your question!
 
                 await memory.close()
 
-            # Send response (split if too long)
+            response = result["response"]
+            files_to_send = result.get("files_to_send", [])
+
+            # Send text response (split if too long)
             if len(response) > 4000:
                 # Split into chunks
                 chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
@@ -176,6 +224,11 @@ Just send me a message or voice note with your question!
                     await update.message.reply_text(chunk)
             else:
                 await update.message.reply_text(response)
+
+            # Send files if any
+            if files_to_send:
+                logger.info("sending_files", count=len(files_to_send))
+                await self._send_files_to_user(update, files_to_send)
 
         except Exception as e:
             logger.error("message_handling_failed", error=str(e), exc_info=True)
@@ -185,7 +238,7 @@ Just send me a message or voice note with your question!
             )
 
     async def handle_voice_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle voice messages."""
+        """Handle voice messages with enhanced transcription."""
         user = update.effective_user
         chat_id = str(update.effective_chat.id)
 
@@ -198,6 +251,9 @@ Just send me a message or voice note with your question!
         # Check file size
         voice = update.message.voice
         size_mb = voice.file_size / (1024 * 1024)
+        duration_seconds = voice.duration
+
+        logger.info("voice_details", size_mb=f"{size_mb:.2f}", duration=duration_seconds)
 
         if size_mb > settings.telegram_max_voice_size_mb:
             await update.message.reply_text(
@@ -206,14 +262,17 @@ Just send me a message or voice note with your question!
             )
             return
 
-        await update.message.reply_text("🎤 Transcribing voice message...")
+        # Inform user about transcription
+        status_msg = await update.message.reply_text(
+            "🎤 Transcribing voice message... (this may take a moment)"
+        )
 
         try:
             # Download voice file
             file = await voice.get_file()
             voice_bytes = await file.download_as_bytearray()
 
-            # Transcribe
+            # Transcribe with enhanced accuracy
             temp_dir = Path("C:/Users/yakuz/Downloads/voiceRec")
             temp_dir.mkdir(exist_ok=True)
 
@@ -222,12 +281,14 @@ Just send me a message or voice note with your question!
                 temp_dir,
             )
 
-            logger.info("voice_transcribed", transcript=transcript[:100])
+            logger.info("voice_transcribed", transcript=transcript[:100], length=len(transcript))
 
-            # Show transcript
-            await update.message.reply_text(f"📝 Transcribed: {transcript}\n\nProcessing...")
+            # Update status message
+            await status_msg.edit_text(f"📝 Transcribed: *{transcript}*\n\nProcessing...", parse_mode="Markdown")
 
             # Process as text message
+            await update.message.chat.send_action(ChatAction.TYPING)
+
             async with self.async_session() as session:
                 memory = ConversationMemory(session)
                 await memory.initialize()
@@ -235,7 +296,7 @@ Just send me a message or voice note with your question!
                 tools = AgentTools(session, self.embedding, self.vector_store)
                 agent = FileAssistantAgent(tools, memory, self.llm)
 
-                response = await agent.run(
+                result = await agent.run(
                     user_query=transcript,
                     user_id=str(user.id),
                     chat_id=chat_id,
@@ -243,13 +304,22 @@ Just send me a message or voice note with your question!
 
                 await memory.close()
 
+            response = result["response"]
+            files_to_send = result.get("files_to_send", [])
+
+            # Send response
             await update.message.reply_text(response)
+
+            # Send files if any
+            if files_to_send:
+                await self._send_files_to_user(update, files_to_send)
 
         except Exception as e:
             logger.error("voice_handling_failed", error=str(e), exc_info=True)
             await update.message.reply_text(
                 "Sorry, I couldn't process your voice message. "
-                "Please try again or send a text message."
+                "Please try again or send a text message.\n\n"
+                f"Error: {str(e)[:100]}"
             )
 
     def register_handlers(self, application):
@@ -269,4 +339,4 @@ Just send me a message or voice note with your question!
             MessageHandler(filters.VOICE, self.handle_voice_message)
         )
 
-        logger.info("handlers_registered")
+        logger.info("enhanced_handlers_registered")

@@ -1,5 +1,6 @@
-"""Tools for the agent."""
-from typing import List, Optional
+"""Enhanced tools for the agent with file sending and precise search."""
+from typing import List, Optional, Dict, Any
+from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -12,7 +13,7 @@ logger = get_logger(__name__)
 
 
 class AgentTools:
-    """Collection of tools for the agent."""
+    """Collection of enhanced tools for the agent."""
 
     def __init__(
         self,
@@ -31,10 +32,10 @@ class AgentTools:
         query: str,
         top_k: int = 5,
         file_types: Optional[List[str]] = None,
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         Search for files by semantic similarity to query.
-        Returns relevant file content and metadata.
+        Returns relevant file content, metadata, AND file paths for sending.
         """
         logger.info("tool_search_files", query=query, top_k=top_k)
 
@@ -51,31 +52,187 @@ class AgentTools:
             results = await self.vector_store.search(
                 query_embedding=query_embedding,
                 top_k=top_k,
-                score_threshold=0.5,
+                score_threshold=0.4,  # Lower threshold for better recall
                 filters=filters if filters else None,
             )
 
             if not results:
-                return "No relevant files found for your query."
+                return {
+                    "text": "No relevant files found for your query.",
+                    "files": []
+                }
 
-            # Format results
+            # Format results with file info for sending
             output_parts = [f"Found {len(results)} relevant results:\n"]
+            files_info = []
 
             for i, result in enumerate(results, 1):
                 output_parts.append(f"\n--- Result {i} ---")
                 output_parts.append(f"File: {result.metadata.file_name}")
                 output_parts.append(f"Type: {result.metadata.file_type}")
                 output_parts.append(f"Relevance: {result.score:.2%}")
-                output_parts.append(f"Content: {result.content[:300]}...")
+                output_parts.append(f"Content: {result.content[:400]}...")
 
                 if result.metadata.page_number:
                     output_parts.append(f"Page: {result.metadata.page_number}")
 
-            return "\n".join(output_parts)
+                # Collect file info for potential sending
+                files_info.append({
+                    "path": result.metadata.file_path,
+                    "name": result.metadata.file_name,
+                    "type": result.metadata.file_type,
+                    "score": result.score,
+                    "content": result.content
+                })
+
+            return {
+                "text": "\n".join(output_parts),
+                "files": files_info
+            }
 
         except Exception as e:
             logger.error("search_files_failed", error=str(e))
-            return f"Error searching files: {str(e)}"
+            return {
+                "text": f"Error searching files: {str(e)}",
+                "files": []
+            }
+
+    async def find_specific_content(
+        self,
+        query: str,
+        file_name: Optional[str] = None,
+        top_k: int = 3,
+    ) -> Dict[str, Any]:
+        """
+        Find specific content like 'question 8' or specific text in files.
+        More precise search for exact information retrieval.
+        """
+        logger.info("tool_find_specific_content", query=query, file_name=file_name)
+
+        try:
+            # Generate embedding
+            query_embedding = await self.embedding_service.generate_query_embedding(query)
+
+            # Build filters
+            filters = {}
+            if file_name:
+                # Search for file by name pattern
+                result = await self.session.execute(
+                    select(FileMetadata).where(
+                        FileMetadata.file_name.ilike(f"%{file_name}%"),
+                        FileMetadata.is_indexed == True
+                    ).limit(1)
+                )
+                file_meta = result.scalar_one_or_none()
+
+                if file_meta:
+                    filters["file_path"] = file_meta.file_path
+
+            # Search with high precision
+            results = await self.vector_store.search(
+                query_embedding=query_embedding,
+                top_k=top_k,
+                score_threshold=0.3,  # Even lower for specific searches
+                filters=filters if filters else None,
+            )
+
+            if not results:
+                return {
+                    "text": f"Could not find specific content matching: {query}",
+                    "files": []
+                }
+
+            # Return most relevant chunk
+            best_result = results[0]
+
+            output_parts = [
+                f"📄 Found in: {best_result.metadata.file_name}",
+                f"Relevance: {best_result.score:.2%}",
+            ]
+
+            if best_result.metadata.page_number:
+                output_parts.append(f"Page: {best_result.metadata.page_number}")
+
+            output_parts.append(f"\nContent:\n{best_result.content}")
+
+            # If there are more results, mention them
+            if len(results) > 1:
+                output_parts.append(
+                    f"\n(Found {len(results)-1} more related sections in this file)"
+                )
+
+            return {
+                "text": "\n".join(output_parts),
+                "files": [{
+                    "path": best_result.metadata.file_path,
+                    "name": best_result.metadata.file_name,
+                    "type": best_result.metadata.file_type,
+                    "score": best_result.score,
+                    "content": best_result.content
+                }]
+            }
+
+        except Exception as e:
+            logger.error("find_specific_content_failed", error=str(e))
+            return {
+                "text": f"Error finding content: {str(e)}",
+                "files": []
+            }
+
+    async def get_file_for_sending(
+        self,
+        file_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get file path and metadata for sending via Telegram.
+        Returns file info if found and accessible.
+        """
+        logger.info("tool_get_file_for_sending", file_name=file_name)
+
+        try:
+            # Search for file by name
+            result = await self.session.execute(
+                select(FileMetadata).where(
+                    FileMetadata.file_name.ilike(f"%{file_name}%"),
+                    FileMetadata.is_indexed == True
+                ).limit(1)
+            )
+
+            file_meta = result.scalar_one_or_none()
+
+            if not file_meta:
+                logger.info("file_not_found", file_name=file_name)
+                return None
+
+            file_path = Path(file_meta.file_path)
+
+            # Check if file exists and is accessible
+            if not file_path.exists():
+                logger.warning("file_not_accessible", path=str(file_path))
+                return None
+
+            # Check file size (Telegram limit: 50MB for bots)
+            file_size_mb = file_meta.file_size_bytes / (1024 * 1024)
+            if file_size_mb > 50:
+                logger.warning("file_too_large", size_mb=file_size_mb)
+                return {
+                    "path": str(file_path),
+                    "name": file_meta.file_name,
+                    "size_mb": file_size_mb,
+                    "too_large": True
+                }
+
+            return {
+                "path": str(file_path),
+                "name": file_meta.file_name,
+                "type": file_meta.file_type,
+                "size_mb": file_size_mb,
+                "too_large": False
+            }
+
+        except Exception as e:
+            logger.error("get_file_for_sending_failed", error=str(e))
+            return None
 
     async def list_files(
         self,
