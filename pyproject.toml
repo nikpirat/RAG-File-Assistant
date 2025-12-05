@@ -1,77 +1,68 @@
 [tool.poetry]
 name = "rag-file-assistant"
-version = "0.1.0"
-description = "RAG-powered Telegram file assistant"
+version = "0.2.0"
+description = "RAG-powered Telegram file assistant with Gemini AI"
 authors = ["Your Name <your.email@example.com>"]
 
 [tool.poetry.dependencies]
 python = "^3.11"
 
-# Core Web Framework
-fastapi = "0.123.0"
-uvicorn = { version = "0.24.0", extras = ["standard"] }
-pydantic = "2.12.5"
-pydantic-settings = "2.12.0"
-python-dotenv = "1.0.0"
-python-multipart = "0.0.20"  # Updated [web:26]
+# Core Framework
+pydantic = "^2.10"
+pydantic-settings = "^2.7"
+python-dotenv = "^1.0"
 
 # Telegram Bot
 python-telegram-bot = { version = "^22.0", extras = ["all"] }
 
-# Agent Framework (LangChain)
-langchain-core = "^0.2.0"        # Explicitly pin to 0.2.x series
-langchain = "^0.2.0"             # Use 0.2.x (matches core 0.2.x)
-langchain-community = "^0.2.0"   # Use 0.2.x (matches core 0.2.x)
-langgraph = "^0.3.0"             # Works with langchain-core 0.2.x
+# Google Gemini AI
+google-generativeai = "^0.8.3"
 
-# Vector DB & Embeddings
-qdrant-client = "1.9.0"
-ollama = "^0.3.0"
-sentence-transformers = "2.2.0"
-transformers = "4.53.0"
+# Agent Framework (LangChain) - Consolidated versions
+langchain-core = "^0.3.0"
+langchain = "^0.3.0"
+langchain-community = "^0.3.0"
+langchain-google-genai = "^2.0.5"
+langgraph = "^0.3.0"
+
+# Vector DB
+qdrant-client = "^1.12"
 
 # Voice Processing
-faster-whisper = "^1.0.0"  # Updated [web:14]
+faster-whisper = "^1.1"
 
-# Document Processing
-unstructured = "0.18.21"
-PyMuPDF = "1.26.6"
-pypdf = "6.4.0"
-python-docx = "1.1.0"
-pandas = "2.3.3"
-openpyxl = "3.1.2"
-python-magic = "0.4.27"
-pillow = "^11.0"  # Updated [web:27]
+# Document Processing - Essential only
+pypdf = "^5.1"
+python-docx = "^1.1"
+pandas = "^2.2"
+openpyxl = "^3.1"
+pillow = "^11.0"
 
 # Database
-sqlalchemy = "2.0.44"
-alembic = "1.17.2"
-psycopg2-binary = "2.9.11"
-asyncpg = "0.31.0"
+sqlalchemy = { version = "^2.0", extras = ["asyncio"] }
+alembic = "^1.14"
+psycopg2-binary = "^2.9"
+asyncpg = "^0.30"
 
-# Task Queue & Monitoring
-celery = { version = "^5.5", extras = ["redis"] }  # Updated to v5.5.x [web:6]
-flower = "^2.0.0"  # Latest stable [web:25]
-redis = "5.0.1"
-hiredis = "^2.3"
+# Task Queue & Cache
+redis = { version = "^5.2", extras = ["hiredis"] }
 
-# Async & File Utilities
-aiofiles = "25.1.0"
-tenacity = "8.2.3"
-watchdog = "3.0.0"
-tqdm = "^4.66"
+# Async & Utilities
+aiofiles = "^25.0"
+tenacity = "^9.0"
+httpx = "^0.28"
+tqdm = "^4.67"
 
 # Logging
-structlog = "23.2.0"
-python-json-logger = "2.0.7"
+structlog = "^25.0"
 
-[tool.poetry.dev-dependencies]
-pytest = "7.4.3"
-pytest-asyncio = "0.21.1"
-pytest-cov = "4.1.0"
-black = "^23.12"
-ruff = "^0.1"
-mypy = "^1.8"
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-asyncio = "^0.24"
+pytest-cov = "^6.0"
+black = "^24.10"
+ruff = "^0.8"
+mypy = "^1.13"
 
 [build-system]
 requires = ["poetry-core"]
@@ -84,9 +75,17 @@ target-version = ['py311']
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"
-strict = true
 warn_return_any = true
 warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]

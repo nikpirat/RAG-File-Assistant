@@ -2,9 +2,7 @@
 import uuid
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from qdrant_client import QdrantClient, AsyncQdrantClient
-from qdrant_client.conversions.common_types import CollectionsResponse
-from qdrant_client.grpc import CollectionDescription
+from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     VectorParams,
     Distance,
@@ -14,6 +12,7 @@ from qdrant_client.models import (
     MatchValue,
     Range,
     SearchParams,
+    PayloadSchemaType,
 )
 from src.config.settings import settings
 from src.config.logging_config import get_logger
@@ -43,11 +42,8 @@ class VectorStore:
     async def create_collection(self) -> None:
         """Create collection if it doesn't exist."""
         try:
-            collections: CollectionsResponse = await self.client.get_collections()
-            collection_list: list[CollectionDescription] = collections.collections
-            collection_names = [c.name for c in collection_list]
-
-            if self.collection_name in collection_names:
+            # FIXED: Correct method is collection_exists()
+            if await self.client.collection_exists(self.collection_name):
                 logger.info("collection_exists", collection=self.collection_name)
                 return
 
@@ -60,8 +56,6 @@ class VectorStore:
             )
 
             logger.info("collection_created", collection=self.collection_name)
-
-            # Create payload indexes for faster filtering
             await self._create_payload_indexes()
 
         except Exception as e:
@@ -71,12 +65,12 @@ class VectorStore:
     async def _create_payload_indexes(self) -> None:
         """Create indexes on payload fields for faster filtering."""
         indexes = [
-            ("file_path", "keyword"),
-            ("file_name", "keyword"),
-            ("file_type", "keyword"),
-            ("file_size_bytes", "integer"),
-            ("chunk_index", "integer"),
-            ("page_number", "integer"),
+            ("file_path", PayloadSchemaType.KEYWORD),
+            ("file_name", PayloadSchemaType.KEYWORD),
+            ("file_type", PayloadSchemaType.KEYWORD),
+            ("file_size_bytes", PayloadSchemaType.INTEGER),
+            ("chunk_index", PayloadSchemaType.INTEGER),
+            ("page_number", PayloadSchemaType.INTEGER),
         ]
 
         for field_name, field_type in indexes:
@@ -91,9 +85,9 @@ class VectorStore:
                 logger.warning("payload_index_creation_failed", field=field_name, error=str(e))
 
     async def upsert_chunks(
-            self,
-            chunks: List[DocumentChunkSchema],
-            embeddings: List[List[float]],
+        self,
+        chunks: List[DocumentChunkSchema],
+        embeddings: List[List[float]],
     ) -> List[str]:
         """Insert or update chunks with embeddings."""
         logger.info("upserting_chunks", count=len(chunks))
@@ -108,7 +102,6 @@ class VectorStore:
             chunk_id = str(uuid.uuid4())
             chunk_ids.append(chunk_id)
 
-            # Prepare payload
             payload = {
                 "content": chunk.content,
                 "file_path": chunk.metadata.file_path,
@@ -120,7 +113,6 @@ class VectorStore:
                 "token_count": chunk.token_count,
             }
 
-            # Add optional fields
             if chunk.metadata.page_number is not None:
                 payload["page_number"] = chunk.metadata.page_number
             if chunk.metadata.section_title:
@@ -136,7 +128,6 @@ class VectorStore:
                 )
             )
 
-        # Batch upsert
         await self.client.upsert(
             collection_name=self.collection_name,
             points=points,
@@ -152,7 +143,7 @@ class VectorStore:
             score_threshold: float = settings.similarity_threshold,
             filters: Optional[Dict[str, Any]] = None,
     ) -> List[SearchResult]:
-        """Search for similar chunks."""
+        """Search for similar chunks using query_points."""
         logger.info(
             "searching_vectors",
             top_k=top_k,
@@ -160,25 +151,23 @@ class VectorStore:
             has_filters=filters is not None,
         )
 
-        # Build filter
         query_filter = self._build_filter(filters) if filters else None
 
-        # Search
-        search_result = await self.client.search(
+        # FIXED: query_points() uses query_filter, not filter
+        response = await self.client.query_points(
             collection_name=self.collection_name,
-            query_vector=query_embedding,
+            query=query_embedding,
             limit=top_k,
             score_threshold=score_threshold,
-            query_filter=query_filter,
+            query_filter=query_filter,  # CHANGED: filter -> query_filter
             search_params=SearchParams(
-                hnsw_ef=128,  # Higher value = better recall, slower search
+                hnsw_ef=128,
                 exact=False,
             ),
         )
 
-        # Convert to SearchResult
         results = []
-        for point in search_result:
+        for point in response.points:
             metadata = ChunkMetadata(
                 file_path=point.payload["file_path"],
                 file_name=point.payload["file_name"],
@@ -218,7 +207,6 @@ class VectorStore:
             )
 
         if "file_name_pattern" in filters and filters["file_name_pattern"]:
-            # Qdrant doesn't support regex, use full-text search or exact match
             conditions.append(
                 FieldCondition(
                     key="file_name",

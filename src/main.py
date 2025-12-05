@@ -1,6 +1,7 @@
-"""Enhanced main application - Zero warnings, fully typed."""
+"""Main application entry point - Optimized with proper lifecycle management."""
 import asyncio
 import sys
+import signal
 from pathlib import Path
 from typing import Optional
 
@@ -12,113 +13,191 @@ from src.config.settings import settings
 from src.tg_bot.bot import create_bot_application
 from src.tg_bot.handlers import BotHandlers
 from src.ingestion.pipeline import IngestionPipeline
-from src.ingestion.file_watcher import FileWatcher
 
 logger = get_logger(__name__)
 
 
-async def run_bot() -> None:
-    """Run the bot with all services."""
-    # Initialize variables
-    application = None
-    file_watcher: Optional[FileWatcher] = None
-    pipeline: Optional[IngestionPipeline] = None
+class Application:
+    """Main application with proper lifecycle management."""
 
-    try:
-        # Initialize ingestion pipeline
-        logger.info("initializing_ingestion_pipeline")
-        pipeline = IngestionPipeline()
-        await pipeline.initialize()
+    def __init__(self):
+        """Initialize application components."""
+        self.bot_app = None
+        self.pipeline: Optional[IngestionPipeline] = None
+        self.handlers: Optional[BotHandlers] = None
+        self.shutdown_event = asyncio.Event()
 
-        # Start file watcher for auto-indexing
-        logger.info("starting_file_watcher")
-        file_watcher = FileWatcher(pipeline)
-        file_watcher.start()
-        logger.info("file_watcher_active", path=str(settings.files_root_path))
+    async def initialize(self) -> None:
+        """Initialize all services."""
+        logger.info("initializing_application")
 
-        # Create Telegram application
-        logger.info("creating_telegram_bot")
-        application = create_bot_application()
+        try:
+            # Initialize ingestion pipeline
+            logger.info("initializing_pipeline")
+            self.pipeline = IngestionPipeline()
+            await self.pipeline.initialize()
+            logger.info("pipeline_initialized")
 
-        # Create and register handlers
-        handlers = BotHandlers()
-        handlers.register_handlers(application)
+            # Check indexed files
+            indexed_count = await self.pipeline.get_indexed_files_count()
+            logger.info("indexed_files_count", count=indexed_count)
 
-        logger.info("bot_starting")
+            if indexed_count == 0:
+                logger.warning(
+                    "no_files_indexed",
+                    message="No files indexed yet. Run 'python scripts/index_files.py' first.",
+                )
 
-        # Initialize and start bot
-        await application.initialize()
-        await application.start()
+            # Create Telegram bot application
+            logger.info("creating_telegram_bot")
+            self.bot_app = create_bot_application()
 
-        # Start polling - FIX: Use getattr to avoid type checker warning
-        updater = getattr(application, 'updater', None)
-        if updater is not None:
+            # Create and register handlers
+            self.handlers = BotHandlers()
+            self.handlers.register_handlers(self.bot_app)
+
+            logger.info("application_initialized_successfully")
+
+        except Exception as e:
+            logger.error("initialization_failed", error=str(e), exc_info=True)
+            await self.cleanup()
+            raise
+
+    async def start(self) -> None:
+        """Start the application."""
+        logger.info("starting_application")
+
+        try:
+            # Initialize bot
+            await self.bot_app.initialize()
+            await self.bot_app.start()
+
+            # Start polling
+            updater = self.bot_app.updater
+            if updater is None:
+                raise RuntimeError("Bot updater not initialized")
+
             await updater.start_polling(
                 allowed_updates=["message", "callback_query"],
                 drop_pending_updates=True,
             )
-        else:
-            raise RuntimeError("Application updater not initialized")
 
-        logger.info("✓ Bot is running with file watcher!")
-        logger.info("✓ Files will be auto-indexed when added/modified")
-        logger.info("✓ Press Ctrl+C to stop.")
+            logger.info("✓ Bot is running!")
+            logger.info("✓ Using Gemini 2.5 Flash for AI")
+            logger.info("✓ Press Ctrl+C to stop")
 
-        # Run until interrupted
-        try:
-            # Keep the bot running
-            await asyncio.Event().wait()
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            logger.info("shutdown_initiated")
+            # Wait for shutdown signal
+            await self.shutdown_event.wait()
 
-    finally:
-        logger.info("bot_stopping")
+        except Exception as e:
+            logger.error("application_start_failed", error=str(e), exc_info=True)
+            raise
 
-        # Stop file watcher
-        if file_watcher is not None:
-            try:
-                logger.info("stopping_file_watcher")
-                file_watcher.stop()
-            except Exception as e:
-                logger.error("file_watcher_stop_error", error=str(e))
+    async def cleanup(self) -> None:
+        """Cleanup resources."""
+        logger.info("cleaning_up_resources")
 
         # Stop bot
-        if application is not None:
+        if self.bot_app is not None:
             try:
-                # Use getattr for updater to avoid warning
-                updater = getattr(application, 'updater', None)
+                logger.info("stopping_bot")
+                updater = self.bot_app.updater
                 if updater is not None:
                     await updater.stop()
-                await application.stop()
-                await application.shutdown()
+                await self.bot_app.stop()
+                await self.bot_app.shutdown()
+                logger.info("bot_stopped")
             except Exception as e:
-                logger.error("application_stop_error", error=str(e))
+                logger.error("bot_cleanup_error", error=str(e))
+
+        # Close handlers (database connections)
+        if self.handlers is not None:
+            try:
+                logger.info("closing_handlers")
+                await self.handlers.cleanup()
+                logger.info("handlers_closed")
+            except Exception as e:
+                logger.error("handlers_cleanup_error", error=str(e))
 
         # Close pipeline
-        if pipeline is not None:
+        if self.pipeline is not None:
             try:
-                await pipeline.close()
+                logger.info("closing_pipeline")
+                await self.pipeline.close()
+                logger.info("pipeline_closed")
             except Exception as e:
-                logger.error("pipeline_close_error", error=str(e))
+                logger.error("pipeline_cleanup_error", error=str(e))
 
-        logger.info("✓ Bot stopped gracefully")
+        logger.info("cleanup_complete")
+
+    def signal_handler(self, signum, frame) -> None:
+        """Handle shutdown signals."""
+        logger.info("shutdown_signal_received", signal=signum)
+        self.shutdown_event.set()
+
+
+async def run_application() -> None:
+    """Run the application with proper error handling."""
+    app = Application()
+
+    # Setup signal handlers
+    signal.signal(signal.SIGINT, app.signal_handler)
+    signal.signal(signal.SIGTERM, app.signal_handler)
+
+    try:
+        # Initialize and start
+        await app.initialize()
+        await app.start()
+
+    except KeyboardInterrupt:
+        logger.info("keyboard_interrupt_received")
+
+    except Exception as e:
+        logger.error("application_error", error=str(e), exc_info=True)
+        raise
+
+    finally:
+        # Cleanup
+        await app.cleanup()
 
 
 def main() -> None:
     """Main entry point."""
+    # Configure logging first
     configure_logging()
-    logger.info("=== Starting Enhanced RAG File Assistant Bot ===")
-    logger.info("app_version", version="Phase 2 Enhanced - v0.2.1")
+
+    logger.info("=" * 60)
+    logger.info("RAG FILE ASSISTANT - GEMINI POWERED")
+    logger.info("=" * 60)
+    logger.info("app_version", version=settings.app_version)
+    logger.info("environment", debug=settings.debug)
+    logger.info("ai_model", model=settings.gemini_model)
+    logger.info("embedding_model", model=settings.gemini_embedding_model)
+    logger.info("=" * 60)
+
+    # Validate critical settings
+    if not settings.gemini_api_key:
+        logger.error("GEMINI_API_KEY not set in environment!")
+        logger.error("Get your API key from: https://makersuite.google.com/app/apikey")
+        sys.exit(1)
+
+    if not settings.telegram_bot_token:
+        logger.error("TELEGRAM_BOT_TOKEN not set in environment!")
+        logger.error("Create a bot with @BotFather on Telegram")
+        sys.exit(1)
 
     try:
-        asyncio.run(run_bot())
+        # Run application
+        asyncio.run(run_application())
+
     except KeyboardInterrupt:
-        logger.info("✓ Keyboard interrupt received")
+        logger.info("✓ Keyboard interrupt - shutting down gracefully")
+
     except Exception as e:
         logger.error("fatal_error", error=str(e), exc_info=True)
         sys.exit(1)
 
-    logger.info("✓ Shutdown complete")
+    logger.info("✓ Application shutdown complete")
     sys.exit(0)
 
 

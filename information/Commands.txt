@@ -30,3 +30,12 @@ docker exec -it rag_redis redis-cli
 
 # See Qdrant collection of chunks
 # Invoke-WebRequest -Uri "http://localhost:6333/collections/chunks" -Method Get
+
+# PostgreSQL
+docker exec -it rag_postgres psql -U postgres -c "SELECT count(*) FROM file_metadata;"
+
+# Qdrant
+curl http://localhost:6333/collections/file_chunks
+
+# Redis
+docker exec -it rag_redis redis-cli INFO stats

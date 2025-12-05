@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional, cast
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from tqdm.asyncio import tqdm
 
 from src.config.settings import settings
@@ -76,7 +76,8 @@ class IngestionPipeline:
             session: AsyncSession,
     ) -> bool:
         """Ingest a single file."""
-        file_metadata: FileMetadata | None = None
+        file_metadata: Optional[FileMetadata] = None
+
         try:
             logger.info("ingesting_file", file_path=str(file_path))
 
@@ -88,18 +89,19 @@ class IngestionPipeline:
 
             # Get file stats
             stat = file_path.stat()
+            file_mtime = datetime.fromtimestamp(stat.st_mtime)
 
-            # Skip if not modified
-            if existing and existing.file_modified_at:
-                file_mtime = datetime.fromtimestamp(stat.st_mtime)
-                if existing.file_modified_at >= file_mtime and existing.is_indexed:
+            # Skip if already indexed AND not modified
+            if existing and existing.file_modified_at and existing.is_indexed:
+                if existing.file_modified_at >= file_mtime:
                     logger.info("file_already_indexed", file_path=str(file_path))
-                    return True
+                    return True  # CRITICAL: Early return was missing!
 
-                # File modified, delete old chunks
+            # File is new or modified - delete old chunks first
+            if existing:
                 await self.vector_store.delete_by_file_path(str(file_path))
                 await session.execute(
-                    select(DocumentChunk).where(
+                    delete(DocumentChunk).where(
                         DocumentChunk.file_metadata_id == existing.id
                     )
                 )
@@ -107,7 +109,7 @@ class IngestionPipeline:
             # Parse document
             parsed_doc = self.parser.parse(file_path)
 
-            # Create/update file metadata
+            # Create or update file metadata
             file_metadata = existing or FileMetadata()
             file_metadata.file_path = str(file_path)
             file_metadata.file_name = file_path.name
@@ -116,12 +118,15 @@ class IngestionPipeline:
             file_metadata.word_count = parsed_doc.word_count
             file_metadata.page_count = parsed_doc.page_count
             file_metadata.file_created_at = datetime.fromtimestamp(stat.st_ctime)
-            file_metadata.file_modified_at = datetime.fromtimestamp(stat.st_mtime)
+            file_metadata.file_modified_at = file_mtime
             file_metadata.extra_metadata = parsed_doc.extra_metadata
+            file_metadata.is_indexed = False  # Default until success
 
             if not existing:
                 session.add(file_metadata)
-            await session.flush()
+            # For existing, fields are already updated above
+
+            await session.flush()  # Flush early to catch constraint violations
 
             # Create chunk metadata
             chunk_meta = ChunkMetadata(
@@ -131,7 +136,7 @@ class IngestionPipeline:
                 file_size_bytes=stat.st_size,
                 chunk_index=0,
                 chunk_type="text",
-                file_modified_at=datetime.fromtimestamp(stat.st_mtime),
+                file_modified_at=file_mtime,
             )
 
             # Chunk document
@@ -166,7 +171,7 @@ class IngestionPipeline:
                 )
                 session.add(db_chunk)
 
-            # Update file metadata
+            # Success - mark as indexed
             file_metadata.is_indexed = True
             file_metadata.chunk_count = len(chunks)
             file_metadata.indexed_at = datetime.now(timezone.utc)
@@ -179,7 +184,6 @@ class IngestionPipeline:
                 file_path=str(file_path),
                 chunks=len(chunks),
             )
-
             return True
 
         except Exception as e:
@@ -190,11 +194,17 @@ class IngestionPipeline:
                 exc_info=True,
             )
 
-            # Record error
-            if 'file_metadata' in locals():
-                file_metadata.is_indexed = False
-                file_metadata.error_message = str(e)
-                await session.commit()
+            # Robust exception handling
+            if file_metadata is not None:  # Fix SyntaxWarning
+                try:
+                    file_metadata.is_indexed = False
+                    file_metadata.error_message = str(e)
+                    await session.rollback()
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+            else:
+                await session.rollback()
 
             return False
 

@@ -145,7 +145,20 @@ class DocumentParser:
         """Parse CSV file."""
         logger.info("parsing_csv", file_path=str(file_path))
 
-        df = pd.read_csv(file_path)
+        # Robust CSV parsing - skip bad lines, handle quotes
+        try:
+            df = pd.read_csv(
+                file_path,
+                on_bad_lines='skip',  # Skip malformed rows
+                quoting=3,  # QUOTE_NONE - handle unquoted CSVs
+                low_memory=False
+            )
+        except Exception as e:
+            logger.warning("csv_parse_fallback", file_path=str(file_path), error=str(e))
+            # Fallback: read as text
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            return ParsedDocument(content=f"CSV Parse Failed: {str(e)}\n\nRaw: {content[:5000]}")
 
         # Convert to formatted text with headers
         content_parts = [
