@@ -42,7 +42,6 @@ class VectorStore:
     async def create_collection(self) -> None:
         """Create collection if it doesn't exist."""
         try:
-            # FIXED: Correct method is collection_exists()
             if await self.client.collection_exists(self.collection_name):
                 logger.info("collection_exists", collection=self.collection_name)
                 return
@@ -137,11 +136,11 @@ class VectorStore:
         return chunk_ids
 
     async def search(
-            self,
-            query_embedding: List[float],
-            top_k: int = settings.top_k_results,
-            score_threshold: float = settings.similarity_threshold,
-            filters: Optional[Dict[str, Any]] = None,
+        self,
+        query_embedding: List[float],
+        top_k: int = settings.top_k_results,
+        score_threshold: float = settings.similarity_threshold,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[SearchResult]:
         """Search for similar chunks using query_points."""
         logger.info(
@@ -153,13 +152,12 @@ class VectorStore:
 
         query_filter = self._build_filter(filters) if filters else None
 
-        # FIXED: query_points() uses query_filter, not filter
         response = await self.client.query_points(
             collection_name=self.collection_name,
             query=query_embedding,
             limit=top_k,
             score_threshold=score_threshold,
-            query_filter=query_filter,  # CHANGED: filter -> query_filter
+            query_filter=query_filter,
             search_params=SearchParams(
                 hnsw_ef=128,
                 exact=False,
@@ -206,6 +204,14 @@ class VectorStore:
                 )
             )
 
+        if "file_path" in filters and filters["file_path"]:
+            conditions.append(
+                FieldCondition(
+                    key="file_path",
+                    match=MatchValue(value=filters["file_path"]),
+                )
+            )
+
         if "file_name_pattern" in filters and filters["file_name_pattern"]:
             conditions.append(
                 FieldCondition(
@@ -247,10 +253,21 @@ class VectorStore:
 
     async def get_collection_info(self) -> Dict[str, Any]:
         """Get collection statistics."""
-        info = await self.client.get_collection(self.collection_name)
-        return {
-            "total_points": info.points_count,
-            "vectors_count": info.vectors_count,
-            "indexed_vectors_count": info.indexed_vectors_count,
-            "status": info.status,
-        }
+        try:
+            info = await self.client.get_collection(self.collection_name)
+
+            # Handle different API versions
+            return {
+                "total_points": info.points_count if hasattr(info, 'points_count') else 0,
+                "vectors_count": info.points_count if hasattr(info, 'points_count') else 0,
+                "indexed_vectors_count": getattr(info, 'indexed_vectors_count', info.points_count if hasattr(info, 'points_count') else 0),
+                "status": str(info.status) if hasattr(info, 'status') else "unknown",
+            }
+        except Exception as e:
+            logger.error("get_collection_info_failed", error=str(e))
+            return {
+                "total_points": 0,
+                "vectors_count": 0,
+                "indexed_vectors_count": 0,
+                "status": "error",
+            }

@@ -1,4 +1,4 @@
-"""LangGraph agent - STRICT: No hallucinations, exact tool results only."""
+"""LangGraph agent - Proper tool result handling."""
 from typing import TypedDict, Annotated, Sequence, Literal, Dict, Any
 import operator
 from langgraph.graph import StateGraph, END
@@ -8,7 +8,7 @@ from langgraph.graph.state import CompiledStateGraph
 from src.config.logging_config import get_logger
 from src.services.llm import LLMService
 from src.agent.tools import AgentTools
-from src.agent.prompts import SYSTEM_PROMPT_ENHANCED, QUERY_CLASSIFICATION_PROMPT_ENHANCED
+from src.agent.prompts import SYSTEM_PROMPT_ENHANCED
 from src.agent.memory import ConversationMemory
 
 logger = get_logger(__name__)
@@ -27,7 +27,7 @@ class AgentState(TypedDict):
 
 
 class FileAssistantAgent:
-    """LangGraph agent - STRICT tool usage only."""
+    """LangGraph agent with proper RAG integration."""
 
     def __init__(
         self,
@@ -38,10 +38,9 @@ class FileAssistantAgent:
         self.tools = tools
         self.memory = memory
         self.llm = llm_service
-
         self.graph = self._build_graph()
 
-        logger.info("strict_agent_initialized")
+        logger.info("fixed_agent_initialized")
 
     def _build_graph(self) -> CompiledStateGraph:
         """Build the agent graph."""
@@ -68,71 +67,54 @@ class FileAssistantAgent:
         return workflow.compile()
 
     async def classify_query(self, state: AgentState) -> AgentState:
-        """Classify the user query."""
+        """Classify the user query - Better detection."""
         logger.info("classifying_query", query=state["user_query"])
-
-        prompt = QUERY_CLASSIFICATION_PROMPT_ENHANCED.format(query=state["user_query"])
-
-        classification = await self.llm.generate(
-            prompt=prompt,
-            temperature=0.0,
-        )
-
-        classification = classification.strip().lower()
-        logger.info("query_classified", classification=classification)
 
         state["tool_calls"] = []
         state["files_to_send"] = []
 
         query_lower = state["user_query"].lower()
 
-        # STRICT classification with specific keywords
-
-        # 1. User wants specific content (paragraphs, sections, questions)
-        if any(word in query_lower for word in ["paragraph", "section", "question", "answer", "line", "page", "chapter"]):
-            state["tool_calls"].append({
-                "tool": "find_specific_content",
-                "query": state["user_query"],
-            })
-            logger.info("classified_as_find_specific")
-
-        # 2. User wants to send/download file
-        elif any(word in query_lower for word in ["send", "give me", "share", "download", "send me the file"]):
+        # Priority 1: User wants to SEND/DOWNLOAD a file
+        if any(word in query_lower for word in ["send me", "give me", "share", "download", "get file", "send the file"]):
             state["tool_calls"].append({
                 "tool": "get_file_for_sending",
                 "query": state["user_query"],
             })
             logger.info("classified_as_send_file")
+            return state
 
-        # 3. User wants to search
-        elif any(word in query_lower for word in ["find", "search", "what is", "about", "documents about"]):
+        # Priority 2: User wants SPECIFIC CONTENT (paragraphs, questions, sections)
+        if any(word in query_lower for word in ["paragraph", "section", "question", "answer", "line", "page", "chapter", "what's in", "what is in", "content of", "inside"]):
             state["tool_calls"].append({
-                "tool": "search_files",
+                "tool": "find_specific_content",
                 "query": state["user_query"],
             })
-            logger.info("classified_as_search")
+            logger.info("classified_as_find_specific")
+            return state
 
-        # 4. User wants to list files
-        elif any(word in query_lower for word in ["list", "show files", "what files", "all files"]):
+        # Priority 3: User wants to LIST files
+        if any(word in query_lower for word in ["list", "show files", "what files", "all files", "show all"]):
             state["tool_calls"].append({
                 "tool": "list_files",
             })
             logger.info("classified_as_list")
+            return state
 
-        # 5. User wants statistics
-        elif any(word in query_lower for word in ["stats", "statistics", "how many", "storage"]):
+        # Priority 4: User wants STATISTICS
+        if any(word in query_lower for word in ["stats", "statistics", "how many", "storage", "count"]):
             state["tool_calls"].append({
                 "tool": "get_file_stats",
             })
             logger.info("classified_as_stats")
+            return state
 
-        # Default: search
-        else:
-            state["tool_calls"].append({
-                "tool": "search_files",
-                "query": state["user_query"],
-            })
-            logger.info("classified_as_default_search")
+        # Default: SEARCH (for content queries, summaries, etc.)
+        state["tool_calls"].append({
+            "tool": "search_files",
+            "query": state["user_query"],
+        })
+        logger.info("classified_as_search")
 
         return state
 
@@ -141,7 +123,7 @@ class FileAssistantAgent:
         return "tool" if state["tool_calls"] else "direct"
 
     async def execute_tool(self, state: AgentState) -> AgentState:
-        """Execute tools and return EXACT results."""
+        """Execute tools - Proper result handling."""
         logger.info("executing_tools", count=len(state["tool_calls"]))
 
         tool_results = []
@@ -157,14 +139,12 @@ class FileAssistantAgent:
                         top_k=5,
                     )
                     result = result_dict["text"]
-                    # Never auto-add files from search
 
                 elif tool_name == "find_specific_content":
                     result_dict = await self.tools.find_specific_content(
                         query=tool_call.get("query", state["user_query"]),
                     )
                     result = result_dict["text"]
-                    # Return exact content, no files
 
                 elif tool_name == "get_file_for_sending":
                     query = tool_call.get("query", state["user_query"])
@@ -172,12 +152,12 @@ class FileAssistantAgent:
 
                     if file_info and file_info.get("exists"):
                         if file_info.get("too_large"):
-                            result = f"❌ File is too large ({file_info['size_mb']:.1f}MB). Limit: 50MB."
+                            result = f"❌ File '{file_info['name']}' is too large ({file_info['size_mb']:.1f}MB). Telegram limit is 50MB."
                         else:
                             state["files_to_send"].append(file_info)
-                            result = f"📤 Sending {file_info['name']} ({file_info['size_mb']:.1f}MB)..."  # ✅ Clear message
+                            result = f"✅ Found file: {file_info['name']} ({file_info['size_mb']:.2f}MB)\nPreparing to send..."
                     else:
-                        result = f"❌ No file found matching your request."
+                        result = f"❌ Could not find file matching: '{query}'"
 
                 elif tool_name == "list_files":
                     result = await self.tools.list_files(limit=20)
@@ -194,15 +174,15 @@ class FileAssistantAgent:
                 })
 
             except Exception as e:
-                logger.error("tool_execution_failed", tool=tool_name, error=str(e))
+                logger.error("tool_execution_failed", tool=tool_name, error=str(e), exc_info=True)
                 tool_results.append({
                     "tool": tool_name,
-                    "result": f"Error: {str(e)}",
+                    "result": f"❌ Error: {str(e)}",
                 })
 
         state["tool_results"] = tool_results
 
-        # Add to messages
+        # Add tool results to messages for context
         tool_message = "\n\n".join([
             f"Tool: {tr['tool']}\nResult:\n{tr['result']}"
             for tr in tool_results
@@ -210,53 +190,48 @@ class FileAssistantAgent:
 
         state["messages"] = list(state["messages"]) + [AIMessage(content=tool_message)]
 
-        # NEW - Count ALL tool content:
-        tool_results = state.get("tool_results", [])
-        content_tools = [tr for tr in tool_results if tr["tool"] in ["search_files", "find_specific_content"]]
-        files_count = len(state["files_to_send"])
-        has_content = len(content_tools) > 0
-        files_queued = files_count + (1 if has_content else 0)
-
-        logger.info("tools_executed", files_queued=files_queued, files_count=files_count, has_content=has_content,
-                    tools=len(tool_results))
+        logger.info("tools_executed", results=len(tool_results), files_queued=len(state["files_to_send"]))
 
         return state
 
     async def generate_response(self, state: AgentState) -> AgentState:
-        """RAG-optimized response - FORCE use of file content."""
-        logger.info("generating_strict_response")
+        """Generate final response - Use ONLY tool results."""
+        logger.info("generating_response")
 
-        tool_content = ""
-        for msg in reversed(state["messages"]):
-            if isinstance(msg, AIMessage) and "✅ Found" in msg.content:
-                tool_content = msg.content
-                logger.info("full_tool_context_captured", length=len(tool_content))
-                break
+        # Extract tool results
+        tool_context = ""
+        if state.get("tool_results"):
+            for tr in state["tool_results"]:
+                tool_context += f"\n{tr['tool']}: {tr['result']}\n"
 
-        prompt = f"""You are a file content assistant.
+        # Build prompt that FORCES using tool results
+        prompt = f"""{SYSTEM_PROMPT_ENHANCED}
 
-        USER QUERY: {state['user_query']}
+USER QUERY: {state['user_query']}
 
-        FILE SEARCH RESULTS (USE ONLY THIS CONTENT):
-        {tool_content}
+TOOL RESULTS (THIS IS YOUR ONLY SOURCE OF TRUTH):
+{tool_context}
 
-        INSTRUCTIONS:
-        1. Extract ALL relevant content about "{state['user_query']}" from above
-        2. If MobTechExam.txt appears, show its CONTENT (questions, text, etc.)
-        3. Quote exact text from the search results
-        4. If no exact match, show closest matching files + their content
+CRITICAL RULES:
+1. Use ONLY information from the TOOL RESULTS above
+2. If tool results say "no files found", you MUST say "no files found"
+3. If tool results list files, use those EXACT file names
+4. DO NOT mention files unless they appear in tool results
+5. DO NOT make assumptions about file content
+6. If sending files, mention it naturally
 
-        ANSWER:"""
+Your response:"""
 
-        logger.info("rag_prompt_length", length=len(prompt))
+        logger.info("prompt_length", length=len(prompt))
 
         response = await self.llm.generate(
             prompt=prompt,
-            temperature=0.0,
+            temperature=0.0,  # Zero temperature for consistency
         )
 
         state["final_response"] = response
-        logger.info("strict_response_generated", length=len(response))
+        logger.info("response_generated", length=len(response))
+
         return state
 
     async def run(
@@ -265,10 +240,10 @@ class FileAssistantAgent:
         user_id: str,
         chat_id: str,
     ) -> Dict[str, Any]:
-        """Run the agent with strict tool usage."""
-        logger.info("strict_agent_run", query=user_query)
+        """Run the agent - Proper memory clearing."""
+        logger.info("agent_run", query=user_query)
 
-        # Get conversation history
+        # Get conversation history (will be empty if cleared)
         recent_messages = await self.memory.get_recent_messages(
             user_id=user_id,
             chat_id=chat_id,
@@ -298,7 +273,7 @@ class FileAssistantAgent:
             response = final_state["final_response"]
             files_to_send = final_state.get("files_to_send", [])
 
-            # Deduplicate files
+            # Deduplicate files by path
             unique_files = []
             seen_paths = set()
             for file_info in files_to_send:
@@ -323,7 +298,7 @@ class FileAssistantAgent:
             )
 
             logger.info(
-                "strict_agent_complete",
+                "agent_complete",
                 files=len(unique_files),
                 response_len=len(response)
             )
@@ -334,8 +309,8 @@ class FileAssistantAgent:
             }
 
         except Exception as e:
-            logger.error("strict_agent_failed", error=str(e), exc_info=True)
+            logger.error("agent_failed", error=str(e), exc_info=True)
             return {
-                "response": f"Sorry, I encountered an error: {str(e)}",
+                "response": f"❌ Sorry, I encountered an error: {str(e)}",
                 "files_to_send": []
             }
